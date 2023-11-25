@@ -12,14 +12,14 @@ struct timer {
   unsigned int ticks;
 } time;
 char timerHMS[9] = "00:00:00"; // часы:минуты:секунды
-unsigned int valueClockTimer = 31307; // чиcло прерываний по часовому кварцу для отсчёта одной секунды 31200 +105
+unsigned int valueClockTimer = 31307; // чиcло прерываний по часовому кварцу для отсчёта одной секунды
 int timeSecOld = 0; // счётчик для прерывания каждую секунду
 
 // Энкодер для настройки частоты оборотов
 int rpm = 100;       // число оборотов в минуту от 100 об/мин до 600 об/мин
 int rpmStep = 10;   // шаг изменения значения скорости об/мин
-const int pinFreq_A = A0;
-const int pinFreq_B = A1;
+const int pinFreq_A = A1;
+const int pinFreq_B = A0;
 unsigned char encoderFreq_A;
 unsigned char encoderFreq_B;
 unsigned char encoderFreq_A_prev=0;
@@ -31,8 +31,8 @@ int millingTime = 1;  // время помола в минутах от 1 мин
 int pauseTime = 0;    // время перерыва в минутах от 0 мин до 600 мин
 int MillingTimeOn = 1;// параметр задаёт переключение ввода с время помола на время паузы
 unsigned int buttonTimerOn = 0; // маркер срабатывания кнопки переключения временем помола и паузой
-const int pinTime_A = A3;
-const int pinTime_B = A4;
+const int pinTime_A = A4;
+const int pinTime_B = A3;
 const int pinTime_D = A2;
 unsigned char encoderTime_A;
 unsigned char encoderTime_B;
@@ -43,8 +43,8 @@ unsigned char encoderTime_A_prev=0;
 int repetitions = 0;   // число повторов от 0 до 99
 int reverse = 0;       // ревер: 0 - выключен, 1 - включен
 unsigned int buttonReverseOn = 0; // маркер срабатывания кнопки реверса
-const int pinRepet_A = A5;
-const int pinRepet_B = A6;
+const int pinRepet_A = A6;
+const int pinRepet_B = A5;
 const int pinReverse_D = A7;
 unsigned char encoderRepet_A;
 unsigned char encoderRepet_B;
@@ -70,8 +70,7 @@ byte bhConverter =(byte)(freqConverter / 256); // старший байт час
 byte blConverter = (byte)(freqConverter); // младший байт частоты
 
 // Переменные для работы счётчика оборотов на датчике Холла
-unsigned long int HallSensorCounter = 0;
-unsigned long int numberHallActivations = 6; // число срабатываний датчика Холла до одного полного оборота
+unsigned long int HallSensorCounter = 0; // счётчик оборотов
 
 // Переменны используемые во время работы двигателя
 int repetitionsNum = repetitions; // текущее число повторов
@@ -109,6 +108,14 @@ void setup() {
   pinMode(pinButtonStart, INPUT);
   pinMode(pinButtonStop, INPUT);
 
+  // Настройка сигналов управления
+  pinMode(14, OUTPUT); // блокировка/разблокировка крышки
+  digitalWrite(14, HIGH); // разблокировка крышки
+
+  pinMode(A14, INPUT); // сигнал о готовности устройства к работе (PASS OK)
+  pinMode(A12, INPUT); // аналоговый сигнал с инклинометра Vadc>0.12В - всё в порядке, Vadc<0.12В - мельница наклонена 
+  analogReference(INTERNAL1V1); // Vref = 1.1В
+
   // Инициализация прерываний от цифрового порта 3 по переднему фронту
   attachInterrupt(0, interruptsHallSensor, FALLING);
 
@@ -119,11 +126,11 @@ void setup() {
   //TCCR4B |= (0<<CS42)|(0<<CS41)|(1<<CS40); // clkI/1
   //TCCR4B |= (0<<CS42)|(1<<CS41)|(0<<CS40); // clkI/8
   //TCCR4B |= (0<<CS42)|(1<<CS41)|(1<<CS40); // clkI/64
-  //TCCR4B |= (1<<CS42)|(0<<CS41)|(0<<CS40); // clkI/256
-  TCCR4B |= (1<<CS42)|(0<<CS41)|(1<<CS40); // clkI/1024
+  TCCR4B |= (1<<CS42)|(0<<CS41)|(0<<CS40); // clkI/256
+  //TCCR4B |= (1<<CS42)|(0<<CS41)|(1<<CS40); // clkI/1024
   TCCR4B |= (1<<WGM42); // прерываение по совпадению c OCR4A
   TIMSK4 |= (1<<OCIE4A);
-  OCR4A = 125; // 125 Гц
+  OCR4A = 250; // 250 Гц
 
   // Найстройка прерываний по часовому таймеру
   TIMSK2 = 0;
@@ -170,22 +177,13 @@ void loop() {
 }
 
 void interruptsHallSensor () {
-  if(millingOn){
+  /*if(millingOn){
     HallSensorCounter++;
-    /*lcd.setCursor(15, 0);
-    lcd.print("   ");
-    lcd.setCursor(15, 0);
-    lcd.print(HallSensorСounter);*/
-    if(HallSensorCounter >= numberHallActivations) {
-      HallSensorCounter = 0;
-      //millingTimerSec++;
-      //millingHallSensorCounter++;
-      // relay off
-      /*digitalWrite(A7, LOW);
-      lcd.setCursor(15, 0);
-      lcd.print(" ");*/
-    }
-  }
+    lcd.setCursor(14, 0);
+    lcd.print("    ");
+    lcd.setCursor(14, 0);
+    lcd.print(HallSensorCounter);
+  }*/
 }
 
 // Прервывания по часовому таймеру
@@ -225,6 +223,31 @@ ISR(TIMER4_COMPA_vect) {
     lcd.print("End ");
   }
   if (!buttonStart && !buttonStartOn) {
+    // Обработка сигнала с инклинометра
+    if (analogRead(A12) < 112) {
+      lcd.setCursor(16, 3);
+      lcd.print("ErrI"); // Ошибка! Планетарная мельница имеет наклон больше допустимого
+      Serial.println("ErrI");
+      return 0;
+    }
+    // Обработка закрытия крышки
+    if (digitalRead(A14) == 0) {
+      digitalWrite(14, LOW); // блокировка крышки
+    } else {
+      lcd.setCursor(16, 3);
+      lcd.print("ErrO"); // Ошибка! У планетаной мельницы открыта крышка
+      Serial.println("ErrO");
+      return 0;
+    }
+    // Обработка сигнала самодиагностики
+    delay(3000); // ожидание срабатывания реле
+    if (digitalRead(A14) == 1) {
+      lcd.setCursor(16, 3);
+      lcd.print("ErrP"); // Ошибка! Самодиагностика не пройдена
+      Serial.println("ErrP");
+      digitalWrite(14, HIGH);
+      return 0;
+    }
     timeSecOld = 0; // начальная секунда для отсчёта прерываний
     buttonStartOn = 1;
     millingOn = 1;
@@ -318,7 +341,6 @@ ISR(TIMER4_COMPA_vect) {
     }
     // Остановка программы после выполнения всех режимов
     if (millingTimerSec >= millingTime*60 && pauseTimerSec >= pauseTime*60 && !reverseOn && !repetitionsNum) {  
-      //delay(5000); // удалить строку после проверки её ненужности
       stopMill ();
       numberCyclesWorked = 0;
       millingTimerSec = 0;
@@ -327,6 +349,29 @@ ISR(TIMER4_COMPA_vect) {
       Serial.println("milling end");
       lcd.setCursor(16, 3); // сигнализация о окончании работы программы
       lcd.print("End ");
+    }
+    // Обработка ошибок во время работы программы
+    // Сигнал с инклинометра
+    if (analogRead(A12) < 112) {
+      stopMill ();
+      numberCyclesWorked = 0;
+      millingTimerSec = 0;
+      pauseTimerSec = 0;
+      pauseTimeOn = 0;
+      lcd.setCursor(16, 3);
+      lcd.print("ErrI"); // Ошибка! Планетарная мельница имеет наклон более допустимого
+      Serial.println("ErrI");
+    }
+    // Сигнал самодиагностики
+    if (digitalRead(A14) == 0) {
+      stopMill ();
+      numberCyclesWorked = 0;
+      millingTimerSec = 0;
+      pauseTimerSec = 0;
+      pauseTimeOn = 0;
+      lcd.setCursor(16, 3);
+      lcd.print("ErrP"); // Ошибка! Самодиагностика не пройдена
+      Serial.println("ErrP");
     }
     if (!pauseTimeOn) millingTimerSec++; // счётчик времени работы
     if (pauseTimeOn) pauseTimerSec++; // счётчик времени паузы
@@ -339,6 +384,8 @@ void stopMill () {
   millingOn = 0;
   converterStop (); // остановить двигатель
   TIMSK2 = (0<<TOIE2); // выключить часовой таймер
+  HallSensorCounter = 0; // сброс счётчика оборотов
+  digitalWrite(14, HIGH); // разблокировка крышки
   Serial.println("stop");
 }
 
