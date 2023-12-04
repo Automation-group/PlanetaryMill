@@ -16,7 +16,7 @@ unsigned int valueClockTimer = 31307; // чиcло прерываний по ч�
 int timeSecOld = 0; // счётчик для прерывания каждую секунду
 
 // Энкодер для настройки частоты оборотов
-int rpm = 100;       // число оборотов в минуту от 100 об/мин до 600 об/мин
+int rpm = 10;      // число оборотов в минуту круглого основания от 10 об/мин до 600 об/мин
 int rpmStep = 10;   // шаг изменения значения скорости об/мин
 const int pinFreq_A = A1;
 const int pinFreq_B = A0;
@@ -65,16 +65,17 @@ const byte backArray[8]={0x01,0x06,0x20,0x00,0x00,0x06,0x02,0x08};// масси�
 const byte stopArray[8]={0x01,0x06,0x20,0x00,0x00,0x01,0x43,0xCA};// массив Стоп
 byte freqArray[8]={0x01,0x06,0x20,0x01,0x00,0x00,0x00,0x00};// массив Частота
 byte readArray[8]={0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};// массив данных чтения
-int freqConverter = (rpm*10)/60; // частота инвертора в Гц умноженная на 10
-byte bhConverter =(byte)(freqConverter / 256); // старший байт частоты
-byte blConverter = (byte)(freqConverter); // младший байт частоты
+unsigned int freqConverter = (rpm*10)/6; // частота инвертора в Гц умноженная на 10
+byte blConverter = freqConverter & 0xff; // младший байт частоты 
+byte bhConverter = freqConverter >> 8; // старший байт частоты
 
 // Переменные для работы счётчика оборотов на датчике Холла
+unsigned int oneRevolutionCounter = 0; // счётчик одного оборота основания планетарной мельницы
 unsigned long int HallSensorCounter = 0; // счётчик оборотов
 
 // Переменны используемые во время работы двигателя
 int repetitionsNum = repetitions; // текущее число повторов
-long int millingTimerSec = 0; // текущее время работы в секундах
+//long int millingTimerSec = 0; // текущее время работы в секундах
 long int pauseTimerSec = 0; // текущее время паузы в секундах
 int pauseTimeOn = 0; // флаг на включение времени паузы
 int reverseOn = 0; // флаг на включение реверса
@@ -177,13 +178,16 @@ void loop() {
 }
 
 void interruptsHallSensor () {
-  /*if(millingOn){
+  oneRevolutionCounter++;
+  if(millingOn && oneRevolutionCounter >= 6) {
+    oneRevolutionCounter = 0;
     HallSensorCounter++;
-    lcd.setCursor(14, 0);
+    // Отладка
+    /*lcd.setCursor(14, 0);
     lcd.print("    ");
     lcd.setCursor(14, 0);
-    lcd.print(HallSensorCounter);
-  }*/
+    lcd.print(HallSensorCounter);*/
+  }
 }
 
 // Прервывания по часовому таймеру
@@ -214,7 +218,7 @@ ISR(TIMER4_COMPA_vect) {
   // Обработка кнопок старт и стоп
   if (!buttonStop && buttonStartOn) {
     numberCyclesWorked = 0;
-    millingTimerSec = 0;
+    HallSensorCounter = 0;
     pauseTimerSec = 0;
     pauseTimeOn = 0;
     reverseOn = 0;
@@ -269,15 +273,14 @@ ISR(TIMER4_COMPA_vect) {
   if (time.sec == timeSecOld+1 && millingOn) {
     timeSecOld = time.sec;
     if(timeSecOld == 59) timeSecOld = -1; // обработка пересчёта с 59 сек до 0 сек
-    // Добавить расчёт оборотов на датчике Холла !!!
     
     // Отсчёт времени работы
-    if (millingTime*60 <= millingTimerSec && millingOn) {
+    if (millingTime*rpm <= HallSensorCounter && millingOn) {
       // Обработка события реверса при выключеном времени паузы
       if (pauseTime == 0 && reverse) {
         if (!reverseOn) {
           reverseOn = 1;
-          millingTimerSec = 0;
+          HallSensorCounter = 0;
           converterBackward ();  // включить двигатель на движение назад
           Serial.println("driver backward 1");
           numberCyclesWorked++; 
@@ -311,7 +314,7 @@ ISR(TIMER4_COMPA_vect) {
         if (reverse) {
           if (!reverseOn) {
             reverseOn = 1;
-            millingTimerSec = 0;
+            HallSensorCounter = 0;
             pauseTimerSec = 0;
             converterBackward ();  // включить двигатель на движение назад
             Serial.println("driver backward 2");
@@ -328,22 +331,22 @@ ISR(TIMER4_COMPA_vect) {
       }
     }
 
-    //Serial.println(millingTimerSec); // отладка
+    //Serial.println(HallSensorCounter); // отладка
     //Serial.println(pauseTimerSec); // отладка
     // Обработка числа повторений
-    if (repetitions > 0 && millingTimerSec >= millingTime*60 && pauseTimerSec >= pauseTime*60 && !reverseOn && repetitionsNum > 0) {
+    if (repetitions > 0 && HallSensorCounter >= millingTime*rpm && pauseTimerSec >= pauseTime*60 && !reverseOn && repetitionsNum > 0) {
       repetitionsNum = repetitionsNum - 1;
-      millingTimerSec = 0;
+      HallSensorCounter = 0;
       pauseTimerSec = 0;
       pauseTimeOn = 0;
       Serial.print("repetition = ");
       Serial.println(repetitionsNum);
     }
     // Остановка программы после выполнения всех режимов
-    if (millingTimerSec >= millingTime*60 && pauseTimerSec >= pauseTime*60 && !reverseOn && !repetitionsNum) {  
+    if (HallSensorCounter >= millingTime*rpm && pauseTimerSec >= pauseTime*60 && !reverseOn && !repetitionsNum) {  
       stopMill ();
       numberCyclesWorked = 0;
-      millingTimerSec = 0;
+      HallSensorCounter = 0;
       pauseTimerSec = 0;
       pauseTimeOn = 0;
       Serial.println("milling end");
@@ -355,7 +358,7 @@ ISR(TIMER4_COMPA_vect) {
     if (analogRead(A12) < 112) {
       stopMill ();
       numberCyclesWorked = 0;
-      millingTimerSec = 0;
+      HallSensorCounter = 0;
       pauseTimerSec = 0;
       pauseTimeOn = 0;
       lcd.setCursor(16, 3);
@@ -366,14 +369,14 @@ ISR(TIMER4_COMPA_vect) {
     if (digitalRead(A14) == 0) {
       stopMill ();
       numberCyclesWorked = 0;
-      millingTimerSec = 0;
+      HallSensorCounter = 0;
       pauseTimerSec = 0;
       pauseTimeOn = 0;
       lcd.setCursor(16, 3);
       lcd.print("ErrP"); // Ошибка! Самодиагностика не пройдена
       Serial.println("ErrP");
     }
-    if (!pauseTimeOn) millingTimerSec++; // счётчик времени работы
+    //if (!pauseTimeOn) millingTimerSec++; // счётчик времени работы
     if (pauseTimeOn) pauseTimerSec++; // счётчик времени паузы
     lcdTimer(); // вывод значений таймера на дисплей
  }
@@ -390,12 +393,12 @@ void stopMill () {
 }
 
 void converterSetFreq () {
-  freqConverter = (rpm*10)/60; // пересчёт из об/мин в частоту в Гц домноженную на 10
+  freqConverter = (rpm*10)/6; // пересчёт из об/мин в частоту в Гц домноженную на 10
   // Команда для задания частоты работы инвертора
-  bhConverter =(byte)(freqConverter / 256); // старший байт частоты
-  freqArray[6] = bhConverter;
-  blConverter = (byte)(freqConverter); // младший байт частоты 
+  blConverter = (byte) (freqConverter & 0xff); // младший байт частоты 
   freqArray[5] = blConverter;
+  bhConverter = (byte) (freqConverter >> 8); // старший байт частоты
+  freqArray[4] = bhConverter;
   ksArray(freqArray); // рассчёт и задание контрольной суммы для комманды задания частоты
   // Задание частоты работы инвертора
   for(int i=0; i<8; i++) {   
@@ -481,7 +484,7 @@ void encoder(){
       lcdFreq();
     }
     else {
-      if(rpm - rpmStep >= 100) rpm -= rpmStep;
+      if(rpm - rpmStep >= 10) rpm -= rpmStep;
       lcdFreq();
     }
   }
