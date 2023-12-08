@@ -16,8 +16,8 @@ unsigned int valueClockTimer = 31307; // чиcло прерываний по ч�
 int timeSecOld = 0; // счётчик для прерывания каждую секунду
 
 // Энкодер для настройки частоты оборотов
-int rpm = 10;      // число оборотов в минуту круглого основания от 10 об/мин до 600 об/мин
-int rpmStep = 10;   // шаг изменения значения скорости об/мин
+unsigned long int rpm = 10;      // число оборотов в минуту круглого основания от 10 об/мин до 600 об/мин
+unsigned long int rpmStep = 10;   // шаг изменения значения скорости об/мин
 const int pinFreq_A = A1;
 const int pinFreq_B = A0;
 unsigned char encoderFreq_A;
@@ -27,8 +27,8 @@ unsigned char encoderFreq_A_prev=0;
 // Энкодер для настройки времени работы
 char timerMilling[6] = "00:01"; // ображение время помола на lcd
 char timerPause[6] = "00:00"; // отображение время паузы на lcd
-int millingTime = 1;  // время помола в минутах от 1 мин до 600 мин
-int pauseTime = 0;    // время перерыва в минутах от 0 мин до 600 мин
+unsigned long int millingTime = 1;  // время помола в минутах от 1 мин до 600 мин
+unsigned long int pauseTime = 0;    // время перерыва в минутах от 0 мин до 600 мин
 int MillingTimeOn = 1;// параметр задаёт переключение ввода с время помола на время паузы
 unsigned int buttonTimerOn = 0; // маркер срабатывания кнопки переключения временем помола и паузой
 const int pinTime_A = A4;
@@ -65,17 +65,19 @@ const byte backArray[8]={0x01,0x06,0x20,0x00,0x00,0x06,0x02,0x08};// масси�
 const byte stopArray[8]={0x01,0x06,0x20,0x00,0x00,0x01,0x43,0xCA};// массив Стоп
 byte freqArray[8]={0x01,0x06,0x20,0x01,0x00,0x00,0x00,0x00};// массив Частота
 byte readArray[8]={0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};// массив данных чтения
-unsigned int freqConverter = (rpm*10)/6; // частота инвертора в Гц умноженная на 10
+unsigned int freqConverter = (rpm*100)/94; // частота инвертора в Гц умноженная на 10 и делится на коэффициент 9.4
 byte blConverter = freqConverter & 0xff; // младший байт частоты 
 byte bhConverter = freqConverter >> 8; // старший байт частоты
 
-// Переменные для работы счётчика оборотов на датчике Холла
-unsigned int oneRevolutionCounter = 0; // счётчик одного оборота основания планетарной мельницы
+// Счётчик оборотов на датчике Холла
+// Используется только для отслеживания полной остановки планетарной мельницы
+int stopOn = 0; // маркер нажатия кнопки СТОП
 unsigned long int HallSensorCounter = 0; // счётчик оборотов
+unsigned int stopCounter = 0; // счётчик отсчёта одной секунды на базе таймера 4 (250 Гц)
 
 // Переменны используемые во время работы двигателя
 int repetitionsNum = repetitions; // текущее число повторов
-//long int millingTimerSec = 0; // текущее время работы в секундах
+long int millingTimerSec = 0; // текущее время работы в секундах
 long int pauseTimerSec = 0; // текущее время паузы в секундах
 int pauseTimeOn = 0; // флаг на включение времени паузы
 int reverseOn = 0; // флаг на включение реверса
@@ -178,16 +180,7 @@ void loop() {
 }
 
 void interruptsHallSensor () {
-  oneRevolutionCounter++;
-  if(millingOn && oneRevolutionCounter >= 6) {
-    oneRevolutionCounter = 0;
-    HallSensorCounter++;
-    // Отладка
-    /*lcd.setCursor(14, 0);
-    lcd.print("    ");
-    lcd.setCursor(14, 0);
-    lcd.print(HallSensorCounter);*/
-  }
+  if(stopOn) HallSensorCounter++;
 }
 
 // Прервывания по часовому таймеру
@@ -214,11 +207,24 @@ ISR(TIMER4_COMPA_vect) {
 
   // Опрос энкодеров если планетарная мельница остановлена
   if (!millingOn) encoder();
- 
+  
+  // Отработка полной остановки двигателя и разблокировка крышки
+  if (stopOn) {
+    stopCounter++;
+    if (stopCounter >= 250) {
+      if(!HallSensorCounter) {
+        stopOn = 0;
+        digitalWrite(14, HIGH); // разблокировка крышки
+      }
+      stopCounter = 0;
+      HallSensorCounter = 0;
+    }
+  }
+
   // Обработка кнопок старт и стоп
   if (!buttonStop && buttonStartOn) {
     numberCyclesWorked = 0;
-    HallSensorCounter = 0;
+    millingTimerSec = 0;
     pauseTimerSec = 0;
     pauseTimeOn = 0;
     reverseOn = 0;
@@ -275,12 +281,13 @@ ISR(TIMER4_COMPA_vect) {
     if(timeSecOld == 59) timeSecOld = -1; // обработка пересчёта с 59 сек до 0 сек
     
     // Отсчёт времени работы
-    if (millingTime*rpm <= HallSensorCounter && millingOn) {
+    //unsigned long int sensCounter = millingTime*freqConverter*6;
+    if (millingTime*60 <= millingTimerSec && millingOn) {
       // Обработка события реверса при выключеном времени паузы
       if (pauseTime == 0 && reverse) {
         if (!reverseOn) {
           reverseOn = 1;
-          HallSensorCounter = 0;
+          millingTimerSec = 0;
           converterBackward ();  // включить двигатель на движение назад
           Serial.println("driver backward 1");
           numberCyclesWorked++; 
@@ -314,7 +321,7 @@ ISR(TIMER4_COMPA_vect) {
         if (reverse) {
           if (!reverseOn) {
             reverseOn = 1;
-            HallSensorCounter = 0;
+            millingTimerSec = 0;
             pauseTimerSec = 0;
             converterBackward ();  // включить двигатель на движение назад
             Serial.println("driver backward 2");
@@ -334,19 +341,19 @@ ISR(TIMER4_COMPA_vect) {
     //Serial.println(HallSensorCounter); // отладка
     //Serial.println(pauseTimerSec); // отладка
     // Обработка числа повторений
-    if (repetitions > 0 && HallSensorCounter >= millingTime*rpm && pauseTimerSec >= pauseTime*60 && !reverseOn && repetitionsNum > 0) {
+    if (repetitions > 0 && millingTimerSec >= millingTime*60 && pauseTimerSec >= pauseTime*60 && !reverseOn && repetitionsNum > 0) {
       repetitionsNum = repetitionsNum - 1;
-      HallSensorCounter = 0;
+      millingTimerSec = 0;
       pauseTimerSec = 0;
       pauseTimeOn = 0;
       Serial.print("repetition = ");
       Serial.println(repetitionsNum);
     }
     // Остановка программы после выполнения всех режимов
-    if (HallSensorCounter >= millingTime*rpm && pauseTimerSec >= pauseTime*60 && !reverseOn && !repetitionsNum) {  
+    if (millingTimerSec >= millingTime*60 && pauseTimerSec >= pauseTime*60 && !reverseOn && !repetitionsNum) {  
       stopMill ();
       numberCyclesWorked = 0;
-      HallSensorCounter = 0;
+      millingTimerSec = 0;
       pauseTimerSec = 0;
       pauseTimeOn = 0;
       Serial.println("milling end");
@@ -358,7 +365,7 @@ ISR(TIMER4_COMPA_vect) {
     if (analogRead(A12) < 112) {
       stopMill ();
       numberCyclesWorked = 0;
-      HallSensorCounter = 0;
+      millingTimerSec = 0;
       pauseTimerSec = 0;
       pauseTimeOn = 0;
       lcd.setCursor(16, 3);
@@ -369,14 +376,14 @@ ISR(TIMER4_COMPA_vect) {
     if (digitalRead(A14) == 0) {
       stopMill ();
       numberCyclesWorked = 0;
-      HallSensorCounter = 0;
+      millingTimerSec = 0;
       pauseTimerSec = 0;
       pauseTimeOn = 0;
       lcd.setCursor(16, 3);
       lcd.print("ErrP"); // Ошибка! Самодиагностика не пройдена
       Serial.println("ErrP");
     }
-    //if (!pauseTimeOn) millingTimerSec++; // счётчик времени работы
+    if (!pauseTimeOn) millingTimerSec++; // счётчик времени работы
     if (pauseTimeOn) pauseTimerSec++; // счётчик времени паузы
     lcdTimer(); // вывод значений таймера на дисплей
  }
@@ -387,13 +394,13 @@ void stopMill () {
   millingOn = 0;
   converterStop (); // остановить двигатель
   TIMSK2 = (0<<TOIE2); // выключить часовой таймер
-  HallSensorCounter = 0; // сброс счётчика оборотов
-  digitalWrite(14, HIGH); // разблокировка крышки
+  millingTimerSec = 0; // сброс счётчика оборотов
+  stopOn = 1; // маркер на отработку полной остановки двигателя
   Serial.println("stop");
 }
 
 void converterSetFreq () {
-  freqConverter = (rpm*10)/6; // пересчёт из об/мин в частоту в Гц домноженную на 10
+  freqConverter = (rpm*100)/94; // пересчёт из об/мин в частоту в Гц
   // Команда для задания частоты работы инвертора
   blConverter = (byte) (freqConverter & 0xff); // младший байт частоты 
   freqArray[5] = blConverter;
